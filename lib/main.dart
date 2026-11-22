@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:epubx/epubx.dart';
 import 'package:record/record.dart';
+import 'package:just_audio/just_audio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -41,8 +43,135 @@ class _HomeScreenState extends State<HomeScreen> {
   int _selectedChapter = 0;
 
   final AudioRecorder _recorder = AudioRecorder();
+  final AudioPlayer _samplePlayer = AudioPlayer();
+
   bool _isRecording = false;
+  bool _isPaused = false;
+  bool _isPlayingSample = false;
   String? _voiceSamplePath;
+
+  static const int _maxSeconds = 15;
+  int _secondsLeft = _maxSeconds;
+  Timer? _countdownTimer;
+
+  static const String _sampleScript =
+      '"Every morning before the city wakes up, I like to sit by the window '
+      'with a warm cup of coffee and read a few pages of a good book. The quiet '
+      'air makes it easy to focus on the rhythm of each sentence, whether the '
+      'story is a fast-paced mystery or a thoughtful essay about history and science."';
+
+  @override
+  void initState() {
+    super.initState();
+    _checkExistingSample();
+    _samplePlayer.playerStateStream.listen((state) {
+      if (state.processingState == ProcessingState.completed) {
+        if (mounted) {
+          setState(() => _isPlayingSample = false);
+        }
+      }
+    });
+  }
+
+  Future<void> _checkExistingSample() async {
+    final dir = await getApplicationDocumentsDirectory();
+    final file = File('${dir.path}/my_voice_sample.wav');
+    if (await file.exists()) {
+      setState(() => _voiceSamplePath = file.path);
+    }
+  }
+
+  String _formatTimer(int totalSeconds) {
+    final mins = (totalSeconds ~/ 60).toString().padLeft(2, '0');
+    final secs = (totalSeconds % 60).toString().padLeft(2, '0');
+    return '$mins:$secs';
+  }
+
+  void _startTimer() {
+    _countdownTimer?.cancel();
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!_isPaused) {
+        if (_secondsLeft > 1) {
+          setState(() => _secondsLeft--);
+        } else {
+          _stopRecording();
+        }
+      }
+    });
+  }
+
+  Future<void> _startRecording() async {
+    if (_isPlayingSample) {
+      await _samplePlayer.stop();
+      setState(() => _isPlayingSample = false);
+    }
+
+    if (await Permission.microphone.request().isGranted) {
+      final dir = await getApplicationDocumentsDirectory();
+      final filePath = '${dir.path}/my_voice_sample.wav';
+      await _recorder.start(
+        const RecordConfig(encoder: AudioEncoder.wav, sampleRate: 24000),
+        path: filePath,
+      );
+      setState(() {
+        _isRecording = true;
+        _isPaused = false;
+        _secondsLeft = _maxSeconds;
+      });
+      _startTimer();
+    }
+  }
+
+  Future<void> _togglePauseRecording() async {
+    if (!_isRecording) return;
+    if (_isPaused) {
+      await _recorder.resume();
+      setState(() => _isPaused = false);
+    } else {
+      await _recorder.pause();
+      setState(() => _isPaused = true);
+    }
+  }
+
+  Future<void> _stopRecording() async {
+    _countdownTimer?.cancel();
+    final path = await _recorder.stop();
+    setState(() {
+      _isRecording = false;
+      _isPaused = false;
+      _secondsLeft = _maxSeconds;
+      _voiceSamplePath = path;
+    });
+  }
+
+  Future<void> _togglePlaySample() async {
+    if (_voiceSamplePath == null) return;
+    if (_isPlayingSample) {
+      await _samplePlayer.stop();
+      setState(() => _isPlayingSample = false);
+    } else {
+      await _samplePlayer.setFilePath(_voiceSamplePath!);
+      setState(() => _isPlayingSample = true);
+      await _samplePlayer.play();
+    }
+  }
+
+  Future<void> _deleteSample() async {
+    if (_isPlayingSample) {
+      await _samplePlayer.stop();
+      setState(() => _isPlayingSample = false);
+    }
+    if (_voiceSamplePath != null) {
+      final file = File(_voiceSamplePath!);
+      if (await file.exists()) {
+        await file.delete();
+      }
+    }
+    setState(() {
+      _voiceSamplePath = null;
+      _secondsLeft = _maxSeconds;
+    });
+  }
 
   Future<void> _pickEpub() async {
     FilePickerResult? result = await FilePicker.platform.pickFiles(
@@ -81,31 +210,11 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _toggleRecording() async {
-    if (_isRecording) {
-      final path = await _recorder.stop();
-      setState(() {
-        _isRecording = false;
-        _voiceSamplePath = path;
-      });
-    } else {
-      if (await Permission.microphone.request().isGranted) {
-        final dir = await getApplicationDocumentsDirectory();
-        final filePath = '${dir.path}/my_voice_sample.wav';
-        await _recorder.start(
-          const RecordConfig(encoder: AudioEncoder.wav, sampleRate: 24000),
-          path: filePath,
-        );
-        setState(() {
-          _isRecording = true;
-        });
-      }
-    }
-  }
-
   @override
   void dispose() {
+    _countdownTimer?.cancel();
     _recorder.dispose();
+    _samplePlayer.dispose();
     super.dispose();
   }
 
@@ -133,27 +242,97 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      'Step 1: Reference Voice Sample (15 sec)',
-                      style: Theme.of(context).textTheme.titleSmall,
-                    ),
-                    const SizedBox(height: 8),
                     Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        ElevatedButton.icon(
-                          onPressed: _toggleRecording,
-                          icon: Icon(_isRecording ? Icons.stop : Icons.mic),
-                          label: Text(_isRecording ? 'Stop Recording' : 'Record Voice'),
+                        Text(
+                          'Step 1: Voice Sample',
+                          style: Theme.of(context).textTheme.titleSmall,
                         ),
-                        const SizedBox(width: 12),
-                        Expanded(
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: _isRecording
+                                ? Colors.red.withValues(alpha: 0.15)
+                                : Colors.grey.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
                           child: Text(
-                            _voiceSamplePath != null
-                                ? 'Saved: my_voice_sample.wav'
-                                : 'No sample recorded yet',
-                            style: const TextStyle(fontSize: 12),
+                            'Left: ${_formatTimer(_secondsLeft)}',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: _isRecording ? Colors.red : null,
+                            ),
                           ),
                         ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context)
+                            .colorScheme
+                            .surfaceContainerHighest
+                            .withValues(alpha: 0.5),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Text(
+                        _sampleScript,
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          fontStyle: FontStyle.italic,
+                          height: 1.35,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        if (!_isRecording)
+                          ElevatedButton.icon(
+                            onPressed: _startRecording,
+                            icon: const Icon(Icons.mic),
+                            label: Text(_voiceSamplePath == null
+                                ? 'Record'
+                                : 'Re-record'),
+                          ),
+                        if (_isRecording) ...[
+                          OutlinedButton.icon(
+                            onPressed: _togglePauseRecording,
+                            icon: Icon(
+                                _isPaused ? Icons.play_arrow : Icons.pause),
+                            label: Text(_isPaused ? 'Resume' : 'Pause'),
+                          ),
+                          ElevatedButton.icon(
+                            onPressed: _stopRecording,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.red,
+                              foregroundColor: Colors.white,
+                            ),
+                            icon: const Icon(Icons.stop),
+                            label: const Text('Stop'),
+                          ),
+                        ],
+                        if (!_isRecording && _voiceSamplePath != null) ...[
+                          OutlinedButton.icon(
+                            onPressed: _togglePlaySample,
+                            icon: Icon(_isPlayingSample
+                                ? Icons.stop
+                                : Icons.volume_up),
+                            label: Text(
+                                _isPlayingSample ? 'Stop' : 'Play Sample'),
+                          ),
+                          IconButton(
+                            onPressed: _deleteSample,
+                            tooltip: 'Delete Recording',
+                            icon: const Icon(Icons.delete_outline,
+                                color: Colors.red),
+                          ),
+                        ],
                       ],
                     ),
                   ],
