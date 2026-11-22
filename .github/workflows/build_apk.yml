@@ -30,10 +30,11 @@ jobs:
             flutter create --platforms=android --org com.hitesh.voicereader --project-name voicereader .
           fi
 
-      - name: Configure Android permissions
+      - name: Configure Android permissions and NDK
         run: |
           MANIFEST="android/app/src/main/AndroidManifest.xml"
           sed -i '/<application/i \    <uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.RECORD_AUDIO"/>' "$MANIFEST"
+          sed -i 's/ndkVersion = flutter.ndkVersion/ndkVersion = "27.0.12077973"/g' android/app/build.gradle.kts
 
       - name: Get dependencies
         run: flutter pub get
