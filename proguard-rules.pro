@@ -1,0 +1,3 @@
+-keep class com.llfbandit.record.** { *; }
+-keep class com.ryanheise.just_audio.** { *; }
+-keep class io.flutter.** { *; }
