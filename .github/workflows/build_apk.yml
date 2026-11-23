@@ -30,12 +30,14 @@ jobs:
             flutter create --platforms=android --org com.hitesh.voicereader --project-name voicereader .
           fi
 
-      - name: Configure Android permissions
+      - name: Configure Android permissions, NDK, and minSdk
         run: |
           MANIFEST="android/app/src/main/AndroidManifest.xml"
-          sed -i '/<application/i \    <uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.RECORD_AUDIO"/>' "$MANIFEST"
+          sed -i '/<application/i \    <uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.RECORD_AUDIO"/>\n    <uses-permission android:name="android.permission.WAKE_LOCK"/>' "$MANIFEST"
+          sed -i 's/ndkVersion = flutter.ndkVersion/ndkVersion = "27.0.12077973"/g' android/app/build.gradle.kts
+          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/g' android/app/build.gradle.kts
 
-      - name: Decode Keystore and Configure Release Signing
+      - name: Decode Keystore and Patch Release Signing
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -43,68 +45,10 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: |
           echo "$KEYSTORE_BASE64" | base64 -d > android/app/my-release-key.jks
-          cp proguard-rules.pro android/app/proguard-rules.pro
           printf "storePassword=%s\nkeyPassword=%s\nkeyAlias=%s\nstoreFile=my-release-key.jks\n" "$KEYSTORE_PASSWORD" "$KEY_PASSWORD" "$KEY_ALIAS" > android/key.properties
-          cat << 'GRADLE' > android/app/build.gradle.kts
-          import java.util.Properties
-          import java.io.FileInputStream
-
-          plugins {
-              id("com.android.application")
-              id("kotlin-android")
-              id("dev.flutter.flutter-gradle-plugin")
-          }
-
-          val keystoreProperties = Properties()
-          val keystorePropertiesFile = rootProject.file("key.properties")
-          if (keystorePropertiesFile.exists()) {
-              keystoreProperties.load(FileInputStream(keystorePropertiesFile))
-          }
-
-          android {
-              namespace = "com.hitesh.voicereader"
-              compileSdk = flutter.compileSdkVersion
-              ndkVersion = "27.0.12077973"
-
-              compileOptions {
-                  sourceCompatibility = JavaVersion.VERSION_11
-                  targetCompatibility = JavaVersion.VERSION_11
-              }
-
-              kotlinOptions {
-                  jvmTarget = JavaVersion.VERSION_11.toString()
-              }
-
-              signingConfigs {
-                  create("release") {
-                      keyAlias = keystoreProperties.getProperty("keyAlias")
-                      keyPassword = keystoreProperties.getProperty("keyPassword")
-                      storeFile = file(keystoreProperties.getProperty("storeFile"))
-                      storePassword = keystoreProperties.getProperty("storePassword")
-                  }
-              }
-
-              defaultConfig {
-                  applicationId = "com.hitesh.voicereader"
-                  minSdk = 23
-                  targetSdk = flutter.targetSdkVersion
-                  versionCode = flutter.versionCode
-                  versionName = flutter.versionName
-              }
-
-              buildTypes {
-                  release {
-                      signingConfig = signingConfigs.getByName("release")
-                      isMinifyEnabled = false
-                      isShrinkResources = false
-                  }
-              }
-          }
-
-          flutter {
-              source = "../.."
-          }
-          GRADLE
+          sed -i '1i import java.util.Properties\nimport java.io.FileInputStream\n' android/app/build.gradle.kts
+          sed -i '/android {/a \    val keystoreProperties = Properties()\n    val keystorePropertiesFile = rootProject.file("key.properties")\n    if (keystorePropertiesFile.exists()) {\n        keystoreProperties.load(FileInputStream(keystorePropertiesFile))\n    }\n    signingConfigs {\n        create("release") {\n            keyAlias = keystoreProperties.getProperty("keyAlias")\n            keyPassword = keystoreProperties.getProperty("keyPassword")\n            storeFile = file(keystoreProperties.getProperty("storeFile"))\n            storePassword = keystoreProperties.getProperty("storePassword")\n        }\n    }' android/app/build.gradle.kts
+          sed -i 's/signingConfig = signingConfigs.getByName("debug")/signingConfig = signingConfigs.getByName("release")\n            isMinifyEnabled = false\n            isShrinkResources = false/g' android/app/build.gradle.kts
 
       - name: Get dependencies
         run: flutter pub get
