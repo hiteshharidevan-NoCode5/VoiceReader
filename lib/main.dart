@@ -9,6 +9,20 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  ErrorWidget.builder = (FlutterErrorDetails details) {
+    return Material(
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Text(
+            'Startup Error:\n${details.exception}',
+            style: const TextStyle(color: Colors.red, fontSize: 14),
+          ),
+        ),
+      ),
+    );
+  };
   runApp(const VoiceReaderApp());
 }
 
@@ -42,13 +56,14 @@ class _HomeScreenState extends State<HomeScreen> {
   List<String> _chapterTitles = [];
   int _selectedChapter = 0;
 
-  final AudioRecorder _recorder = AudioRecorder();
-  final AudioPlayer _samplePlayer = AudioPlayer();
+  AudioRecorder? _recorder;
+  AudioPlayer? _samplePlayer;
 
   bool _isRecording = false;
   bool _isPaused = false;
   bool _isPlayingSample = false;
   String? _voiceSamplePath;
+  String? _statusMessage;
 
   static const int _maxSeconds = 15;
   int _secondsLeft = _maxSeconds;
@@ -59,25 +74,36 @@ class _HomeScreenState extends State<HomeScreen> {
       'with a warm cup of coffee and read a few pages of a good book. The quiet '
       'air makes it easy to focus on the rhythm of each sentence, whether the '
       'story is a fast-paced mystery or a thoughtful essay about history and science."';
-
   @override
   void initState() {
     super.initState();
+    _initAudio();
     _checkExistingSample();
-    _samplePlayer.playerStateStream.listen((state) {
-      if (state.processingState == ProcessingState.completed) {
-        if (mounted) {
-          setState(() => _isPlayingSample = false);
+  }
+
+  void _initAudio() {
+    try {
+      _recorder = AudioRecorder();
+      _samplePlayer = AudioPlayer();
+      _samplePlayer?.playerStateStream.listen((state) {
+        if (state.processingState == ProcessingState.completed) {
+          if (mounted) setState(() => _isPlayingSample = false);
         }
-      }
-    });
+      });
+    } catch (e) {
+      setState(() => _statusMessage = 'Audio init warning: $e');
+    }
   }
 
   Future<void> _checkExistingSample() async {
-    final dir = await getApplicationDocumentsDirectory();
-    final file = File('${dir.path}/my_voice_sample.wav');
-    if (await file.exists()) {
-      setState(() => _voiceSamplePath = file.path);
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File('${dir.path}/my_voice_sample.wav');
+      if (await file.exists()) {
+        setState(() => _voiceSamplePath = file.path);
+      }
+    } catch (e) {
+      setState(() => _statusMessage = 'Storage check warning: $e');
     }
   }
 
@@ -102,14 +128,13 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _startRecording() async {
     if (_isPlayingSample) {
-      await _samplePlayer.stop();
+      await _samplePlayer?.stop();
       setState(() => _isPlayingSample = false);
     }
-
     if (await Permission.microphone.request().isGranted) {
       final dir = await getApplicationDocumentsDirectory();
       final filePath = '${dir.path}/my_voice_sample.wav';
-      await _recorder.start(
+      await _recorder?.start(
         const RecordConfig(encoder: AudioEncoder.wav, sampleRate: 24000),
         path: filePath,
       );
@@ -117,6 +142,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _isRecording = true;
         _isPaused = false;
         _secondsLeft = _maxSeconds;
+        _statusMessage = null;
       });
       _startTimer();
     }
@@ -125,17 +151,17 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _togglePauseRecording() async {
     if (!_isRecording) return;
     if (_isPaused) {
-      await _recorder.resume();
+      await _recorder?.resume();
       setState(() => _isPaused = false);
     } else {
-      await _recorder.pause();
+      await _recorder?.pause();
       setState(() => _isPaused = true);
     }
   }
 
   Future<void> _stopRecording() async {
     _countdownTimer?.cancel();
-    final path = await _recorder.stop();
+    final path = await _recorder?.stop();
     setState(() {
       _isRecording = false;
       _isPaused = false;
@@ -145,27 +171,25 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _togglePlaySample() async {
-    if (_voiceSamplePath == null) return;
+    if (_voiceSamplePath == null || _samplePlayer == null) return;
     if (_isPlayingSample) {
-      await _samplePlayer.stop();
+      await _samplePlayer!.stop();
       setState(() => _isPlayingSample = false);
     } else {
-      await _samplePlayer.setFilePath(_voiceSamplePath!);
+      await _samplePlayer!.setFilePath(_voiceSamplePath!);
       setState(() => _isPlayingSample = true);
-      await _samplePlayer.play();
+      await _samplePlayer!.play();
     }
   }
 
   Future<void> _deleteSample() async {
     if (_isPlayingSample) {
-      await _samplePlayer.stop();
+      await _samplePlayer?.stop();
       setState(() => _isPlayingSample = false);
     }
     if (_voiceSamplePath != null) {
       final file = File(_voiceSamplePath!);
-      if (await file.exists()) {
-        await file.delete();
-      }
+      if (await file.exists()) await file.delete();
     }
     setState(() {
       _voiceSamplePath = null;
@@ -178,15 +202,12 @@ class _HomeScreenState extends State<HomeScreen> {
       type: FileType.custom,
       allowedExtensions: ['epub'],
     );
-
     if (result != null && result.files.single.path != null) {
       File file = File(result.files.single.path!);
       List<int> bytes = await file.readAsBytes();
       EpubBook epubBook = await EpubReader.readBook(bytes);
-
       List<String> titles = [];
       List<String> contents = [];
-
       if (epubBook.Chapters != null) {
         for (var chapter in epubBook.Chapters!) {
           String rawHtml = chapter.HtmlContent ?? '';
@@ -200,7 +221,6 @@ class _HomeScreenState extends State<HomeScreen> {
           }
         }
       }
-
       setState(() {
         _bookTitle = epubBook.Title ?? 'Untitled Book';
         _chapterTitles = titles;
@@ -209,12 +229,11 @@ class _HomeScreenState extends State<HomeScreen> {
       });
     }
   }
-
   @override
   void dispose() {
     _countdownTimer?.cancel();
-    _recorder.dispose();
-    _samplePlayer.dispose();
+    _recorder?.dispose();
+    _samplePlayer?.dispose();
     super.dispose();
   }
 
@@ -236,6 +255,12 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            if (_statusMessage != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8.0),
+                child: Text(_statusMessage!,
+                    style: const TextStyle(color: Colors.red, fontSize: 12)),
+              ),
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(12.0),
@@ -245,10 +270,8 @@ class _HomeScreenState extends State<HomeScreen> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text(
-                          'Step 1: Voice Sample',
-                          style: Theme.of(context).textTheme.titleSmall,
-                        ),
+                        Text('Step 1: Voice Sample',
+                            style: Theme.of(context).textTheme.titleSmall),
                         Container(
                           padding: const EdgeInsets.symmetric(
                               horizontal: 10, vertical: 4),
@@ -281,10 +304,9 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: const Text(
                         _sampleScript,
                         style: TextStyle(
-                          fontSize: 12.5,
-                          fontStyle: FontStyle.italic,
-                          height: 1.35,
-                        ),
+                            fontSize: 12.5,
+                            fontStyle: FontStyle.italic,
+                            height: 1.35),
                       ),
                     ),
                     const SizedBox(height: 10),
@@ -340,10 +362,8 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
             const SizedBox(height: 12),
-            Text(
-              'Book: $_bookTitle',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
+            Text('Book: $_bookTitle',
+                style: Theme.of(context).textTheme.titleMedium),
             if (_chapterTitles.isNotEmpty) ...[
               DropdownButton<int>(
                 isExpanded: true,
@@ -352,10 +372,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   _chapterTitles.length,
                   (index) => DropdownMenuItem(
                     value: index,
-                    child: Text(
-                      _chapterTitles[index],
-                      overflow: TextOverflow.ellipsis,
-                    ),
+                    child: Text(_chapterTitles[index],
+                        overflow: TextOverflow.ellipsis),
                   ),
                 ),
                 onChanged: (val) {
@@ -365,16 +383,15 @@ class _HomeScreenState extends State<HomeScreen> {
               const SizedBox(height: 8),
               Expanded(
                 child: SingleChildScrollView(
-                  child: Text(
-                    _chapters[_selectedChapter],
-                    style: const TextStyle(fontSize: 16, height: 1.5),
-                  ),
+                  child: Text(_chapters[_selectedChapter],
+                      style: const TextStyle(fontSize: 16, height: 1.5)),
                 ),
               ),
             ] else
               const Expanded(
                 child: Center(
-                  child: Text('Tap the folder icon above to open an .epub book.'),
+                  child:
+                      Text('Tap the folder icon above to open an .epub book.'),
                 ),
               ),
           ],
